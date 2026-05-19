@@ -9,7 +9,7 @@ description = "Turn YouTube into a research source for AI. MCP server for search
 readme = "README.en.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-keywords = ["mcp", "youtube", "research", "ai", "transcript", "llm"]
+keywords = ["mcp", "youtube", "youtube-mcp", "mcp-server", "research", "ai", "transcript", "llm", "claude", "cursor", "comments", "channel-analysis"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
