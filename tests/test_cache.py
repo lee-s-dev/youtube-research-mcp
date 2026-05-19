@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-import cache
-from models import CommentResult, SearchResult, TranscriptResult
+from youtube_research_mcp import cache
+from youtube_research_mcp.models import CommentResult, SearchResult, TranscriptResult
 
 
 class CacheTest(unittest.TestCase):
@@ -14,8 +14,6 @@ class CacheTest(unittest.TestCase):
             path = cache.cache_path()
             self.assertTrue(path.is_absolute())
             self.assertTrue(str(path).endswith("data/test-cache.db"))
-            # must be resolved relative to the project root, not cwd
-            self.assertIn("cache.py", [f.name for f in path.parent.parent.iterdir()])
 
     def test_transcript_cache_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmpdir:

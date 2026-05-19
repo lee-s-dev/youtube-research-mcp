@@ -1,6 +1,6 @@
 import unittest
 
-from youtube_utils import detect_sponsor_signals
+from youtube_research_mcp.youtube_utils import detect_sponsor_signals
 
 
 class DetectSponsorSignalsTest(unittest.TestCase):

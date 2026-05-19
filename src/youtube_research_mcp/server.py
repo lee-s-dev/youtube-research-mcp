@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
-import cache
-from models import (
+from . import cache
+from .cache import _data_dir
+from .models import (
     ResearchBrief,
     ResearchDiscussionCollection,
     ResearchDiscussionSource,
@@ -17,7 +17,7 @@ from models import (
     VideoAnalysisCollection,
     VideoDiscussion,
 )
-from youtube_utils import (
+from .youtube_utils import (
     CHANNEL_ID_RE,
     MAX_COMMENTS,
     MAX_RESEARCH_VIDEOS,
@@ -26,23 +26,23 @@ from youtube_utils import (
     extract_video_id,
     fetch_comments,
     fetch_transcript,
+    filter_comments_quality,
     filter_search_quality,
     get_video_metadata,
     has_api_key,
     list_channel_videos,
     normalize_comment_order,
     normalize_query,
+    normalize_search_order,
     resolve_channel_handle,
     search_videos as youtube_search_videos,
 )
 
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-load_dotenv(PROJECT_ROOT / ".env")
-LOG_DIR = PROJECT_ROOT / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+load_dotenv()  # .env in cwd or parent dirs (local dev)
+_LOG_DIR = _data_dir() / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
-    filename=LOG_DIR / "youtube_research_mcp.log",
+    filename=_LOG_DIR / "youtube_research_mcp.log",
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
 )
@@ -57,6 +57,7 @@ def get_transcript(
     url_or_video_id: str,
     languages: list[str] | None = None,
     preserve_formatting: bool = False,
+    force_refresh: bool = False,
 ) -> dict:
     """Fetch a YouTube transcript by URL or video ID."""
     video_id = extract_video_id(url_or_video_id)
@@ -64,6 +65,7 @@ def get_transcript(
         video_id,
         languages=languages,
         preserve_formatting=preserve_formatting,
+        force_refresh=force_refresh,
     )
     log_event("get_transcript", video_id=video_id, cache=result.from_cache)
     return result.model_dump()
@@ -76,6 +78,8 @@ def search_videos(
     published_after: str | None = None,
     published_before: str | None = None,
     exclude_shorts: bool = False,
+    search_order: str = "relevance",
+    force_refresh: bool = False,
 ) -> list[dict]:
     """Search YouTube videos and return structured metadata."""
     safe_query = normalize_query(query)
@@ -84,6 +88,8 @@ def search_videos(
         max_results=max_results,
         published_after=published_after,
         published_before=published_before,
+        search_order=search_order,
+        force_refresh=force_refresh,
     )
     if exclude_shorts:
         results = filter_search_quality(results, exclude_shorts=True)
@@ -98,10 +104,13 @@ def get_video_comments(
     max_comments: int = 50,
     order: str = "relevance",
     include_replies: bool = False,
+    min_comment_length: int = 8,
+    min_like_count: int = 2,
+    force_refresh: bool = False,
 ) -> list[dict]:
     """Fetch top-level YouTube comments for one video."""
     video_id = extract_video_id(url_or_video_id)
-    comments = get_comments_cached(video_id, max_comments, order, include_replies)
+    comments = get_comments_cached(video_id, max_comments, order, include_replies, min_comment_length, min_like_count, force_refresh)
     log_event("get_video_comments", video_id=video_id, comments=len(comments))
     return [comment.model_dump() for comment in comments]
 
@@ -115,17 +124,23 @@ def collect_video_discussion(
     include_replies: bool = False,
     include_segments: bool = False,
     max_transcript_chars: int = 0,
+    min_comment_length: int = 8,
+    min_like_count: int = 2,
+    force_refresh: bool = False,
 ) -> dict:
     """Collect one video's transcript plus comments for discussion analysis."""
     video_id = extract_video_id(url_or_video_id)
-    transcript = get_transcript_cached(video_id, languages=languages)
-    metadata = get_video_metadata_cached(video_id)
+    transcript = get_transcript_cached(video_id, languages=languages, force_refresh=force_refresh)
+    metadata = get_video_metadata_cached(video_id, force_refresh=force_refresh)
     transcript.metadata = metadata
     comments = get_comments_cached(
         video_id,
         max_comments=max_comments,
         order=comment_order,
         include_replies=include_replies,
+        min_comment_length=min_comment_length,
+        min_like_count=min_like_count,
+        force_refresh=force_refresh,
     )
     prepared = _truncate_transcript(
         _strip_segments(transcript, include_segments),
@@ -159,7 +174,9 @@ async def collect_research_sources(
     min_view_count: int = 0,
     max_per_channel: int = 0,
     include_segments: bool = False,
-    max_transcript_chars: int = 0,
+    max_transcript_chars: int = 8000,
+    search_order: str = "relevance",
+    force_refresh: bool = False,
 ) -> dict:
     """Search YouTube and collect transcript-ready sources for analysis."""
     safe_max_videos = clamp_int(max_videos, 1, MAX_RESEARCH_VIDEOS)
@@ -170,6 +187,8 @@ async def collect_research_sources(
         safe_max_videos,
         published_after,
         published_before,
+        search_order,
+        force_refresh,
     )
     candidates = filter_search_quality(
         candidates,
@@ -190,7 +209,7 @@ async def collect_research_sources(
 
     async def _fetch_one(video) -> tuple:
         async with _IO_SEMAPHORE:
-            transcript = await _async_transcript(video.video_id, languages)
+            transcript = await _async_transcript(video.video_id, languages, force_refresh=force_refresh)
             transcript.metadata = video
             if not transcript.transcript_available:
                 return None, {"video_id": video.video_id, "reason": transcript.error_reason or "transcript_unavailable"}
@@ -245,7 +264,11 @@ async def collect_research_discussions(
     min_view_count: int = 0,
     max_per_channel: int = 0,
     include_segments: bool = False,
-    max_transcript_chars: int = 0,
+    max_transcript_chars: int = 8000,
+    min_comment_length: int = 8,
+    min_like_count: int = 2,
+    search_order: str = "relevance",
+    force_refresh: bool = False,
 ) -> dict:
     """Search YouTube and collect transcript plus comments for each usable video."""
     safe_max_videos = clamp_int(max_videos, 1, MAX_RESEARCH_VIDEOS)
@@ -256,6 +279,8 @@ async def collect_research_discussions(
         safe_max_videos,
         published_after,
         published_before,
+        search_order,
+        force_refresh,
     )
     candidates = filter_search_quality(
         candidates,
@@ -277,13 +302,13 @@ async def collect_research_discussions(
     async def _fetch_one(video) -> tuple:
         async with _IO_SEMAPHORE:
             extra_skips: list[dict[str, str]] = []
-            transcript = await _async_transcript(video.video_id, languages)
+            transcript = await _async_transcript(video.video_id, languages, force_refresh=force_refresh)
             transcript.metadata = video
             if not transcript.transcript_available:
                 return None, [{"video_id": video.video_id, "reason": transcript.error_reason or "transcript_unavailable"}]
             comments: list = []
             try:
-                comments = await _async_comments(video.video_id, max_comments_per_video, comment_order, include_replies)
+                comments = await _async_comments(video.video_id, max_comments_per_video, comment_order, include_replies, min_comment_length, min_like_count, force_refresh)
             except RuntimeError as exc:
                 extra_skips.append({"video_id": video.video_id, "reason": str(exc)})
             source = ResearchDiscussionSource(
@@ -330,7 +355,10 @@ async def analyze_videos(
     include_replies: bool = False,
     include_comments: bool = True,
     include_segments: bool = False,
-    max_transcript_chars: int = 0,
+    max_transcript_chars: int = 8000,
+    min_comment_length: int = 8,
+    min_like_count: int = 2,
+    force_refresh: bool = False,
 ) -> dict:
     """Collect transcripts, metadata, and optional comments for specific videos."""
     unique_video_ids = dedupe_video_ids(urls_or_video_ids)
@@ -339,11 +367,11 @@ async def analyze_videos(
         async with _IO_SEMAPHORE:
             extra_skips: list[dict[str, str]] = []
             try:
-                metadata = await _async_metadata(video_id)
+                metadata = await _async_metadata(video_id, force_refresh=force_refresh)
             except RuntimeError as exc:
                 return None, [{"video_id": video_id, "reason": str(exc)}]
 
-            transcript = await _async_transcript(video_id, languages)
+            transcript = await _async_transcript(video_id, languages, force_refresh=force_refresh)
             transcript.metadata = metadata
             if not transcript.transcript_available:
                 return None, [{"video_id": video_id, "reason": transcript.error_reason or "transcript_unavailable"}]
@@ -351,7 +379,7 @@ async def analyze_videos(
             comments: list = []
             if include_comments:
                 try:
-                    comments = await _async_comments(video_id, max_comments_per_video, comment_order, include_replies)
+                    comments = await _async_comments(video_id, max_comments_per_video, comment_order, include_replies, min_comment_length, min_like_count, force_refresh)
                 except RuntimeError as exc:
                     extra_skips.append({"video_id": video_id, "reason": str(exc)})
 
@@ -398,13 +426,16 @@ async def analyze_channel(
     languages: list[str] | None = None,
     include_segments: bool = False,
     include_comments: bool = True,
+    min_comment_length: int = 8,
+    min_like_count: int = 2,
+    force_refresh: bool = False,
     min_duration_seconds: int = 120,
     max_duration_seconds: int = 7200,
     published_after: str | None = None,
     published_before: str | None = None,
     exclude_shorts: bool = True,
     min_view_count: int = 0,
-    max_transcript_chars: int = 0,
+    max_transcript_chars: int = 8000,
 ) -> dict:
     """Collect transcripts and comments from a specific YouTube channel's recent videos."""
     channel_id = _resolve_channel_id(channel_id_or_handle)
@@ -416,6 +447,7 @@ async def analyze_channel(
         safe_max_videos,
         published_after,
         published_before,
+        force_refresh,
     )
     candidates = filter_search_quality(
         candidates,
@@ -436,14 +468,14 @@ async def analyze_channel(
     async def _fetch_one(video) -> tuple:
         async with _IO_SEMAPHORE:
             extra_skips: list[dict[str, str]] = []
-            transcript = await _async_transcript(video.video_id, languages)
+            transcript = await _async_transcript(video.video_id, languages, force_refresh=force_refresh)
             transcript.metadata = video
             if not transcript.transcript_available:
                 return None, [{"video_id": video.video_id, "reason": transcript.error_reason or "transcript_unavailable"}]
             comments: list = []
             if include_comments:
                 try:
-                    comments = await _async_comments(video.video_id, max_comments_per_video, "relevance", False)
+                    comments = await _async_comments(video.video_id, max_comments_per_video, "relevance", False, min_comment_length, min_like_count, force_refresh)
                 except RuntimeError as exc:
                     extra_skips.append({"video_id": video.video_id, "reason": str(exc)})
             source = ResearchDiscussionSource(
@@ -514,11 +546,13 @@ def get_transcript_cached(
     url_or_video_id: str,
     languages: list[str] | None = None,
     preserve_formatting: bool = False,
+    force_refresh: bool = False,
 ):
     video_id = extract_video_id(url_or_video_id)
-    cached = cache.get_transcript(video_id)
-    if cached:
-        return cached
+    if not force_refresh:
+        cached = cache.get_transcript(video_id)
+        if cached:
+            return cached
 
     transcript = fetch_transcript(
         video_id,
@@ -535,17 +569,21 @@ def get_comments_cached(
     max_comments: int,
     order: str,
     include_replies: bool,
+    min_comment_length: int = 8,
+    min_like_count: int = 2,
+    force_refresh: bool = False,
 ):
     safe_max_comments = clamp_int(max_comments, 1, MAX_COMMENTS)
     safe_order = normalize_comment_order(order)
-    cached = cache.get_comments(
-        video_id,
-        max_comments=safe_max_comments,
-        order=safe_order,
-        include_replies=include_replies,
-    )
-    if cached is not None:
-        return cached
+    if not force_refresh:
+        cached = cache.get_comments(
+            video_id,
+            max_comments=safe_max_comments,
+            order=safe_order,
+            include_replies=include_replies,
+        )
+        if cached is not None:
+            return filter_comments_quality(cached, min_comment_length, min_like_count)
 
     comments = fetch_comments(
         video_id,
@@ -562,14 +600,15 @@ def get_comments_cached(
     )
     pages = max(1, -(-safe_max_comments // 100))  # ceil division
     cache.log_quota("commentThreads.list", pages)
-    return comments
+    return filter_comments_quality(comments, min_comment_length, min_like_count)
 
 
-def get_video_metadata_cached(url_or_video_id: str):
+def get_video_metadata_cached(url_or_video_id: str, force_refresh: bool = False):
     video_id = extract_video_id(url_or_video_id)
-    cached = cache.get_video(video_id)
-    if cached:
-        return cached
+    if not force_refresh:
+        cached = cache.get_video(video_id)
+        if cached:
+            return cached
 
     metadata = get_video_metadata(video_id)
     cache.save_video(metadata)
@@ -578,16 +617,16 @@ def get_video_metadata_cached(url_or_video_id: str):
     return metadata
 
 
-async def _async_transcript(video_id: str, languages=None, preserve_formatting: bool = False):
-    return await asyncio.to_thread(get_transcript_cached, video_id, languages, preserve_formatting)
+async def _async_transcript(video_id: str, languages=None, preserve_formatting: bool = False, force_refresh: bool = False):
+    return await asyncio.to_thread(get_transcript_cached, video_id, languages, preserve_formatting, force_refresh)
 
 
-async def _async_comments(video_id: str, max_comments: int, order: str, include_replies: bool):
-    return await asyncio.to_thread(get_comments_cached, video_id, max_comments, order, include_replies)
+async def _async_comments(video_id: str, max_comments: int, order: str, include_replies: bool, min_comment_length: int = 8, min_like_count: int = 2, force_refresh: bool = False):
+    return await asyncio.to_thread(get_comments_cached, video_id, max_comments, order, include_replies, min_comment_length, min_like_count, force_refresh)
 
 
-async def _async_metadata(video_id: str):
-    return await asyncio.to_thread(get_video_metadata_cached, video_id)
+async def _async_metadata(video_id: str, force_refresh: bool = False):
+    return await asyncio.to_thread(get_video_metadata_cached, video_id, force_refresh)
 
 
 def dedupe_video_ids(urls_or_video_ids: list[str]) -> list[str]:
@@ -609,19 +648,24 @@ def search_videos_impl(
     max_results: int = 5,
     published_after: str | None = None,
     published_before: str | None = None,
+    search_order: str = "relevance",
+    force_refresh: bool = False,
 ) -> list:
     safe_query = normalize_query(query)
     safe_max = clamp_int(max_results, 1, 10)
+    safe_order = normalize_search_order(search_order)
 
-    cached = cache.get_search(safe_query, safe_max, published_after, published_before)
-    if cached is not None:
-        return cached
+    if not force_refresh:
+        cached = cache.get_search(safe_query, safe_max, published_after, published_before)
+        if cached is not None:
+            return cached
 
     results = youtube_search_videos(
         query=safe_query,
         max_results=safe_max,
         published_after=published_after,
         published_before=published_before,
+        order=safe_order,
     )
     cache.save_search(safe_query, safe_max, published_after, published_before, results)
     cache.log_quota("search.list", 100)
@@ -634,11 +678,13 @@ def list_channel_videos_impl(
     max_results: int = 5,
     published_after: str | None = None,
     published_before: str | None = None,
+    force_refresh: bool = False,
 ) -> list:
     safe_max_results = clamp_int(max_results, 1, MAX_RESEARCH_VIDEOS)
-    cached = cache.get_search("", safe_max_results, published_after, published_before, channel_id=channel_id)
-    if cached is not None:
-        return cached
+    if not force_refresh:
+        cached = cache.get_search("", safe_max_results, published_after, published_before, channel_id=channel_id)
+        if cached is not None:
+            return cached
 
     results = list_channel_videos(
         channel_id=channel_id,

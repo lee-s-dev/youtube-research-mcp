@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "youtube-research-mcp"
+version = "0.1.0"
+description = "Turn YouTube into a research source for AI. MCP server for searching, transcripts, comments, and multi-video analysis."
+readme = "README.en.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["mcp", "youtube", "research", "ai", "transcript", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "fastmcp>=2.0.0",
+    "youtube-transcript-api>=1.2.0",
+    "google-api-python-client>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "yt-dlp>=2024.1.0",
+]
+
+[project.scripts]
+youtube-research-mcp = "youtube_research_mcp.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/lee-s-dev/youtube-research-mcp"
+Repository = "https://github.com/lee-s-dev/youtube-research-mcp"
+Issues = "https://github.com/lee-s-dev/youtube-research-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/youtube_research_mcp"]

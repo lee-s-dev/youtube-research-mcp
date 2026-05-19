@@ -1,6 +1,6 @@
 import unittest
 
-from youtube_utils import (
+from youtube_research_mcp.youtube_utils import (
     clamp_int,
     extract_video_id,
     normalize_languages,

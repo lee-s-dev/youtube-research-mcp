@@ -5,22 +5,32 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
-from models import CommentResult, SearchResult, TranscriptResult, VideoMetadata
+from .models import CommentResult, SearchResult, TranscriptResult, VideoMetadata
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_TRANSCRIPT_CACHE_TTL_DAYS = 30
 DEFAULT_COMMENT_CACHE_TTL_HOURS = 6
 DEFAULT_SEARCH_CACHE_TTL_HOURS = 2
 
 
+def _data_dir() -> Path:
+    """Return platform-appropriate user data directory."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "youtube-research-mcp"
+    if sys.platform == "win32":
+        return Path(os.getenv("APPDATA", str(Path.home()))) / "youtube-research-mcp"
+    return Path(os.getenv("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "youtube-research-mcp"
+
+
 def cache_path() -> Path:
-    configured = Path(os.getenv("YOUTUBE_RESEARCH_CACHE_DB", "data/cache.db"))
-    if configured.is_absolute():
-        return configured
-    return PROJECT_ROOT / configured
+    configured = os.getenv("YOUTUBE_RESEARCH_CACHE_DB")
+    if configured:
+        p = Path(configured)
+        return p if p.is_absolute() else Path.cwd() / p
+    return _data_dir() / "cache.db"
 
 
 @contextmanager

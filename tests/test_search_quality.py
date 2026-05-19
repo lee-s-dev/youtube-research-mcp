@@ -1,7 +1,7 @@
 import unittest
 
-from models import SearchResult
-from youtube_utils import filter_search_quality
+from youtube_research_mcp.models import SearchResult
+from youtube_research_mcp.youtube_utils import filter_search_quality
 
 
 def _result(video_id, *, duration=None, view_count=None, channel=None, title=None):

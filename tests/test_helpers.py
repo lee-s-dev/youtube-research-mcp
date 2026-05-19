@@ -1,12 +1,8 @@
 """Tests for server-level helpers: _check_duration, _truncate_transcript."""
-import sys
-import os
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from models import TranscriptResult, VideoMetadata
-from server import _check_duration, _truncate_transcript
+from youtube_research_mcp.models import TranscriptResult, VideoMetadata
+from youtube_research_mcp.server import _check_duration, _truncate_transcript
 
 
 def _video(duration=None):
@@ -59,7 +55,7 @@ class TruncateTranscriptTest(unittest.TestCase):
         self.assertIs(result, t)
 
     def test_segments_cleared_after_truncation(self):
-        from models import TranscriptSegment
+        from youtube_research_mcp.models import TranscriptSegment
         t = _transcript("a" * 200)
         t = t.model_copy(update={"segments": [TranscriptSegment(text="hi", start=0.0, duration=1.0)]})
         result = _truncate_transcript(t, max_chars=50)

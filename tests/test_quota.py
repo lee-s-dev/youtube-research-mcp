@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import cache
+from youtube_research_mcp import cache
 
 
 class QuotaLogTest(unittest.TestCase):

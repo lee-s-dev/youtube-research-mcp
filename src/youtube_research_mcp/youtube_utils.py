@@ -17,7 +17,7 @@ from youtube_transcript_api._errors import (
     VideoUnavailable,
 )
 
-from models import CommentResult, SearchResult, TranscriptResult, TranscriptSegment, VideoMetadata
+from .models import CommentResult, SearchResult, TranscriptResult, TranscriptSegment, VideoMetadata
 
 
 VIDEO_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{11}$")
@@ -137,6 +137,7 @@ def search_videos(
     max_results: int = 5,
     published_after: str | None = None,
     published_before: str | None = None,
+    order: str = "relevance",
 ) -> list[SearchResult]:
     if not has_api_key():
         raise RuntimeError(
@@ -148,13 +149,14 @@ def search_videos(
 
     safe_query = normalize_query(query)
     safe_max_results = clamp_int(max_results, 1, MAX_SEARCH_RESULTS)
+    safe_order = normalize_search_order(order)
     youtube = build_youtube_client(api_key)
     search_request = youtube.search().list(
         part="snippet",
         q=safe_query,
         type="video",
         maxResults=safe_max_results,
-        order="relevance",
+        order=safe_order,
         publishedAfter=_as_rfc3339(published_after),
         publishedBefore=_as_rfc3339(published_before),
     )
@@ -528,6 +530,24 @@ def normalize_languages(languages: list[str] | None) -> list[str]:
 
 def normalize_comment_order(order: str) -> str:
     return order if order in {"relevance", "time"} else "relevance"
+
+
+def normalize_search_order(order: str) -> str:
+    return order if order in {"relevance", "date", "viewCount", "rating"} else "relevance"
+
+
+def filter_comments_quality(
+    comments: list,
+    min_comment_length: int = 8,
+    min_like_count: int = 2,
+) -> list:
+    if min_comment_length > 0:
+        comments = [c for c in comments if len(c.text.strip()) >= min_comment_length]
+    if min_like_count > 0:
+        max_likes = max((c.like_count or 0 for c in comments), default=0)
+        if max_likes >= 10:
+            comments = [c for c in comments if (c.like_count or 0) >= min_like_count]
+    return comments
 
 
 def clamp_int(value: int, minimum: int, maximum: int) -> int:

@@ -1,6 +1,6 @@
 import unittest
 
-from server import dedupe_video_ids
+from youtube_research_mcp.server import dedupe_video_ids
 
 
 class ServerHelpersTest(unittest.TestCase):
